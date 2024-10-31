@@ -19,14 +19,65 @@ use bytestring::ByteString;
 use futures_core::stream::Stream;
 use tokio::sync::mpsc::Receiver;
 
+#[cfg(feature = "compress-deflate")]
+use super::deflate::{DeflateCompressionContext, DeflateDecompressionContext};
 use crate::AggregatedMessageStream;
+
+enum FrameEncoder {
+    Basic(Codec),
+    #[cfg(feature = "compress-deflate")]
+    Deflate(DeflateCompressionContext),
+}
+
+impl Encoder<Message> for FrameEncoder {
+    type Error = ProtocolError;
+
+    fn encode(&mut self, item: Message, dst: &mut BytesMut) -> Result<(), Self::Error> {
+        match self {
+            Self::Basic(encoder) => encoder.encode(item, dst),
+            #[cfg(feature = "compress-deflate")]
+            Self::Deflate(encoder) => encoder.encode(item, dst),
+        }
+    }
+}
+
+enum FrameDecoder {
+    Basic(Codec),
+    #[cfg(feature = "compress-deflate")]
+    Deflate(DeflateDecompressionContext),
+}
+
+impl FrameDecoder {
+    fn max_size(mut self, max_size: usize) -> Self {
+        self = match self {
+            Self::Basic(codec) => Self::Basic(codec.max_size(max_size)),
+            #[cfg(feature = "compress-deflate")]
+            Self::Deflate(decoder) => Self::Deflate(decoder.max_size(max_size)),
+        };
+
+        self
+    }
+}
+
+impl Decoder for FrameDecoder {
+    type Item = Frame;
+    type Error = ProtocolError;
+
+    fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
+        match self {
+            Self::Basic(decoder) => decoder.decode(src),
+            #[cfg(feature = "compress-deflate")]
+            Self::Deflate(decoder) => decoder.decode(src),
+        }
+    }
+}
 
 /// Response body for a WebSocket.
 pub struct StreamingBody {
     session_rx: Receiver<Message>,
     messages: VecDeque<Message>,
     buf: BytesMut,
-    codec: Codec,
+    encoder: FrameEncoder,
     closing: bool,
 }
 
@@ -36,7 +87,21 @@ impl StreamingBody {
             session_rx,
             messages: VecDeque::new(),
             buf: BytesMut::new(),
-            codec: Codec::new(),
+            encoder: FrameEncoder::Basic(Codec::new()),
+            closing: false,
+        }
+    }
+
+    #[cfg(feature = "compress-deflate")]
+    pub(super) fn new_deflate(
+        session_rx: Receiver<Message>,
+        deflate_compress: DeflateCompressionContext,
+    ) -> Self {
+        StreamingBody {
+            session_rx,
+            messages: VecDeque::new(),
+            buf: BytesMut::new(),
+            encoder: FrameEncoder::Deflate(deflate_compress),
             closing: false,
         }
     }
@@ -48,7 +113,7 @@ pub struct MessageStream {
 
     messages: VecDeque<Message>,
     buf: BytesMut,
-    codec: Codec,
+    decoder: FrameDecoder,
     closing: bool,
 }
 
@@ -58,7 +123,21 @@ impl MessageStream {
             payload,
             messages: VecDeque::new(),
             buf: BytesMut::new(),
-            codec: Codec::new(),
+            decoder: FrameDecoder::Basic(Codec::new()),
+            closing: false,
+        }
+    }
+
+    #[cfg(feature = "compress-deflate")]
+    pub(super) fn new_deflate(
+        payload: Payload,
+        deflate_decompress: DeflateDecompressionContext,
+    ) -> Self {
+        MessageStream {
+            payload,
+            messages: VecDeque::new(),
+            buf: BytesMut::new(),
+            decoder: FrameDecoder::Deflate(deflate_decompress),
             closing: false,
         }
     }
@@ -79,7 +158,7 @@ impl MessageStream {
     /// ```
     #[must_use]
     pub fn max_frame_size(mut self, max_size: usize) -> Self {
-        self.codec = self.codec.max_size(max_size);
+        self.decoder = self.decoder.max_size(max_size);
         self
     }
 
@@ -136,7 +215,7 @@ impl Stream for StreamingBody {
         }
 
         while let Some(msg) = this.messages.pop_front() {
-            if let Err(err) = this.codec.encode(msg, &mut this.buf) {
+            if let Err(err) = this.encoder.encode(msg, &mut this.buf) {
                 return Poll::Ready(Some(Err(err.into())));
             }
         }
@@ -182,7 +261,7 @@ impl Stream for MessageStream {
         }
 
         // Create messages until there's no more bytes left
-        while let Some(frame) = this.codec.decode(&mut this.buf)? {
+        while let Some(frame) = this.decoder.decode(&mut this.buf)? {
             let message = match frame {
                 Frame::Text(bytes) => {
                     ByteString::try_from(bytes)

@@ -16,9 +16,16 @@ use actix_web::{web, HttpRequest, HttpResponse};
 use tokio::sync::mpsc::channel;
 
 mod aggregated;
+#[cfg(feature = "compress-deflate")]
+mod deflate;
 mod session;
 mod stream;
 
+#[cfg(feature = "compress-deflate")]
+pub use self::deflate::{
+    DeflateCodec, DeflateCompressionContext, DeflateConfig, DeflateDecompressionContext,
+    DeflateHandshakeError,
+};
 pub use self::{
     aggregated::{AggregatedMessage, AggregatedMessageStream},
     session::{Closed, Session},
@@ -82,4 +89,45 @@ pub fn handle(
         Session::new(tx),
         MessageStream::new(body.into_inner()),
     ))
+}
+
+/// Begin handling websocket traffic with `permessage-deflate` extension.
+#[cfg(feature = "compress-deflate")]
+pub fn handle_with_permessage_deflate(
+    req: &HttpRequest,
+    body: web::Payload,
+    config: &deflate::DeflateConfig,
+) -> Result<(HttpResponse, Session, MessageStream), actix_web::Error> {
+    let mut response = handshake(req.head())?;
+    let deflate = config.create_session(req)?;
+
+    let (tx, rx) = channel(32);
+
+    let session = Session::new(tx);
+
+    let (message_stream, streaming_body) = if let Some((
+        DeflateCodec {
+            compress,
+            decompress,
+        },
+        header_pair,
+    )) = deflate
+    {
+        response.append_header(header_pair);
+        (
+            MessageStream::new_deflate(body.into_inner(), decompress),
+            StreamingBody::new_deflate(rx, compress),
+        )
+    } else {
+        (
+            MessageStream::new(body.into_inner()),
+            StreamingBody::new(rx),
+        )
+    };
+
+    let response = response
+        .message_body(BodyStream::new(streaming_body).boxed())?
+        .into();
+
+    Ok((response, session, message_stream))
 }
