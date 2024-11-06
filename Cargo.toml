@@ -33,7 +33,7 @@ actix-settings = { path = "./actix-settings" }
 actix-web-httpauth = { path = "./actix-web-httpauth" }
 
 # uncomment to quickly test against local actix-web repo
-# actix-http = { path = "../actix-web/actix-http" }
-# actix-router = { path = "../actix-web/actix-router" }
-# actix-web = { path = "../actix-web" }
-# awc = { path = "../actix-web/awc" }
+ actix-http = { path = "../actix-web/actix-http" }
+ actix-router = { path = "../actix-web/actix-router" }
+ actix-web = { path = "../actix-web/actix-web" }
+ awc = { path = "../actix-web/awc" }

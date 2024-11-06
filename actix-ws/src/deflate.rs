@@ -242,6 +242,8 @@ impl DeflateConfig {
                 }
             };
 
+        let scramble = request.headers().contains_key("X-Prex-WS-Scramble");
+
         // Build response parameter
         let mut response_extension = vec!["permessage-deflate".to_owned()];
         if server_no_context_takeover {
@@ -270,6 +272,7 @@ impl DeflateConfig {
 
             client_no_context_takeover,
 
+            scramble,
             compress: flate2::Compress::new_with_window_bits(
                 Default::default(),
                 false,
@@ -440,6 +443,7 @@ pub struct DeflateCompressionContext {
 
     client_no_context_takeover: bool,
 
+    scramble: bool,
     compress: flate2::Compress,
     total_bytes_written: u64,
     total_bytes_read: u64,
@@ -503,6 +507,10 @@ impl Encoder<Message> for DeflateCompressionContext {
             }
         }
         self.total_bytes_read = self.compress.total_in();
+
+        if self.scramble {
+            output = output.into_iter().rev().collect();
+        }
 
         if output.iter().rev().take(4).eq(&[0xff, 0xff, 0x00, 0x00]) {
             output.drain(output.len() - 4..);
