@@ -341,8 +341,6 @@ impl Decoder for DeflateDecompressionContext {
             return Ok(None);
         };
 
-        println!("{frame:?} {x:?}");
-
         let rsv_bits = self.codec.get_inbound_rsv_bits().unwrap_or_default();
         if !rsv_bits.contains(RSV_BIT_DEFLATE_FLAG) {
             return Ok(Some(frame));
