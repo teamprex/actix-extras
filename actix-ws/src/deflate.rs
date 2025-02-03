@@ -471,10 +471,9 @@ impl Encoder<Message> for DeflateCompressionContext {
 
         let mut output = vec![];
         let mut buf = [0u8; BUF_SIZE];
-
         loop {
-            let total_in = self.compress.total_in() - self.total_bytes_read;
-            let res = if total_in >= bytes.len() as u64 {
+            let bytes_in = self.compress.total_in() - self.total_bytes_read;
+            let res = if bytes_in >= bytes.len() as u64 {
                 self.compress
                     .compress(&[], &mut buf, flate2::FlushCompress::Sync)
                     .map_err(|e| {
@@ -483,7 +482,11 @@ impl Encoder<Message> for DeflateCompressionContext {
                     })?
             } else {
                 self.compress
-                    .compress(&bytes, &mut buf, flate2::FlushCompress::None)
+                    .compress(
+                        &bytes[bytes_in as usize..],
+                        &mut buf,
+                        flate2::FlushCompress::None,
+                    )
                     .map_err(|e| {
                         self.reset();
                         ProtocolError::Io(e.into())
