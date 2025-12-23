@@ -267,9 +267,7 @@ impl DeflateConfig {
 
         let compression_context = DeflateCompressionContext {
             codec: Codec::new(),
-
-            client_no_context_takeover,
-
+            server_no_context_takeover,
             compress: flate2::Compress::new_with_window_bits(
                 Default::default(),
                 false,
@@ -281,11 +279,8 @@ impl DeflateConfig {
 
         let decompression_context = DeflateDecompressionContext {
             codec: Codec::new(),
-
-            server_no_context_takeover,
-
+            client_no_context_takeover,
             decompress: flate2::Decompress::new_with_window_bits(false, server_max_window_bits),
-
             decode_continuation: false,
             total_bytes_written: 0,
             total_bytes_read: 0,
@@ -304,7 +299,7 @@ impl DeflateConfig {
 pub struct DeflateDecompressionContext {
     codec: Codec,
 
-    server_no_context_takeover: bool,
+    client_no_context_takeover: bool,
 
     decompress: flate2::Decompress,
 
@@ -334,8 +329,6 @@ impl Decoder for DeflateDecompressionContext {
     type Error = ProtocolError;
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
-        let x = src.clone();
-
         let frame = self.codec.decode(src)?;
         let Some(mut frame) = frame else {
             return Ok(None);
@@ -425,7 +418,7 @@ impl Decoder for DeflateDecompressionContext {
 
         *bytes = output.into();
 
-        if fin && self.server_no_context_takeover {
+        if fin && self.client_no_context_takeover {
             self.reset();
         }
 
@@ -436,7 +429,7 @@ impl Decoder for DeflateDecompressionContext {
 pub struct DeflateCompressionContext {
     codec: Codec,
 
-    client_no_context_takeover: bool,
+    server_no_context_takeover: bool,
 
     compress: flate2::Compress,
     total_bytes_written: u64,
@@ -544,7 +537,7 @@ impl Encoder<Message> for DeflateCompressionContext {
             Message::Text(_) | Message::Binary(_) | Message::Continuation(Item::Last(_))
         );
 
-        if fin && self.client_no_context_takeover {
+        if fin && self.server_no_context_takeover {
             self.reset();
         }
 
